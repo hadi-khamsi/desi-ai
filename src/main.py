@@ -175,8 +175,8 @@ def main():
             
             if speak_enabled and voice_handler:
                 print("Speaking...")
-                voice_handler.speak(response)
-                print()
+                voice_handler.speak(response)  # runs in parallel
+
         except Exception as e:
             print(f"\nError: {e}\n")
 
