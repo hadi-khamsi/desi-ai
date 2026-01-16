@@ -16,9 +16,9 @@ class APIConfig:
 
 def get_config() -> APIConfig:
     return APIConfig(
-        api_key=os.getenv("HF_API_KEY", ""),
-        base_url="https://router.huggingface.co/v1",
-        model=os.getenv("HF_MODEL", "Qwen/Qwen2.5-Coder-32B-Instruct"),
-        max_tokens=int(os.getenv("MAX_TOKENS", "1024")),
+        api_key=os.getenv("GROQ_API_KEY", ""),
+        base_url="https://api.groq.com/openai/v1",
+        model=os.getenv("MODEL", "llama-3.3-70b-versatile"),
+        max_tokens=int(os.getenv("MAX_TOKENS", "2048")),
         temperature=float(os.getenv("TEMPERATURE", "0.7")),
     )
