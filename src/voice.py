@@ -15,6 +15,28 @@ from elevenlabs.client import ElevenLabs
 from faster_whisper import WhisperModel
 from pydub import AudioSegment
 
+def to_spoken_style(text: str) -> str:
+    """Edge-friendly speech formatting WITHOUT SSML"""
+
+    text = text.replace("*", "")
+    text = text.replace("\n", " ")
+
+    # Natural pauses using punctuation ONLY
+    text = text.replace(". ", "... ")
+    text = text.replace(", ", ", ")
+    
+    # Add small rhythm helpers
+    text = text.replace(" Haadi", " Haadi, ")
+    text = text.replace(" yaar", " yaar, ")
+
+    # Remove anything that sounds like code
+    forbidden = ["<", ">", "=", "/", "break", "time", "ms"]
+    for f in forbidden:
+        text = text.replace(f, "")
+
+    return text.strip()
+
+
 
 class TTSProvider(ABC):
     @abstractmethod
@@ -27,12 +49,16 @@ class EdgeTTSProvider(TTSProvider):
         self.voice = voice
 
     def generate(self, text: str, output_path: str):
-        asyncio.run(self._async_generate(text, output_path))
+        styled = to_spoken_style(text)
+        asyncio.run(self._async_generate(styled, output_path))
 
     async def _async_generate(self, text: str, output_path: str):
-        rate = "+25%"
-        pitch = "+10Hz"
-        communicate = edge_tts.Communicate(text, self.voice, rate=rate, pitch=pitch)
+        communicate = edge_tts.Communicate(
+            text,
+            self.voice,
+            rate="+14%",   
+            pitch="+3Hz"
+        )
         await communicate.save(output_path)
 
 
@@ -143,30 +169,50 @@ class VoiceHandler:
         
     def _mix_with_music(self, speech_path: str, output_path: str):
         speech = AudioSegment.from_file(speech_path)
-        
-        if self.music_volume == 0:
-            speech.export(output_path, format="mp3")
-            return
-        
-        music_file = self._get_random_music()
 
+        # If music disabled → just export clean speech
+        if not hasattr(self, "music_volume") or self.music_volume <= 0:
+            speech.export(output_path, format="mp3", bitrate="192k")
+            return
+
+        music_file = self._get_random_music()
         if not music_file:
-            speech.export(output_path, format="mp3")
+            speech.export(output_path, format="mp3", bitrate="192k")
             return
 
         music = AudioSegment.from_file(str(music_file))
-        
-        reduction_db = 40 - (self.music_volume * 20)
-        music = music - reduction_db
 
+        # ---- SAFE NORMALIZATION ----
+        speech = speech.normalize(headroom=1.0)
+        music = music.normalize(headroom=1.0)
+
+        # Clamp volume between 0–1
+        vol = max(0.0, min(1.0, float(self.music_volume)))
+
+        # Map volume to a SAFE range: music stays -28dB → -18dB under voice
+        music_gain = -28 + (vol * 10)
+        music = music + music_gain
+
+        # Match length
         if len(music) < len(speech):
             repeats = (len(speech) // len(music)) + 1
             music = music * repeats
 
         music = music[: len(speech)]
-        music = music.fade_in(1000).fade_out(2000)
-        mixed = speech.overlay(music)
-        mixed.export(output_path, format="mp3")
+
+        # Gentle fades to kill bass pops
+        music = music.fade_in(1200).fade_out(2000)
+
+        # ---- SAFE OVERLAY WITH HEADROOM ----
+        mixed = speech.overlay(
+            music,
+            gain_during_overlay=-2  # prevents clipping
+        )
+
+        # Final limiter-style normalize
+        mixed = mixed.normalize(headroom=0.8)
+
+        mixed.export(output_path, format="mp3", bitrate="192k")
 
     def speak(self, text: str):
         temp_speech = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
