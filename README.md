@@ -1,21 +1,20 @@
 ## Services
 
-### LLM (AI Brain) - FREE
-**Groq API** (Llama 3.3 70B) - 14,400 requests/day  
-Generates educational responses with fast, reliable inference  
-→ Get API key: [groq.com](https://groq.com)
+| Service | Provider                | Cost         |
+|---------|-------------------------|--------------|
+| LLM     | Groq (Llama 3.3 70B)    | Free         |
+| STT     | Groq Whisper            | Free         |
+| TTS     | Edge TTS / ElevenLabs   | Free / $22/mo|
+| Music   | Local MP3s in `/music`  | Free         |
 
-### Text-to-Speech - FREE/PAID
-**FREE:** Microsoft Edge TTS (Indian voice) - Decent quality for testing  
-→ Installed via requirements.txt
+## Setup
+1. Copy `.env.example` to `.env`
+2. Add `GROQ_API_KEY` from [groq.com](https://groq.com)
+3. `pip install -r requirements.txt`
+4. `python src/main.py` → type `convo`
 
-**PAID:** ElevenLabs ($22/month) - Premium Bollywood-style voice  
-→ Get API key: [elevenlabs.io](https://elevenlabs.io)
-
-### Speech-to-Text - FREE
-**Whisper** (runs locally) - Transcribes your voice input to text  
-→ Installed via requirements.txt
-
-### Background Music - FREE
-**Local MP3 files** - Bollywood instrumentals during responses  
-→ Add files to `/music` folder in project root
+## TODO
+- [ ] Web RAG - current info (search triggers → filler audio → fetch → inject)
+- [ ] History RAG - conversation memory (embed past convos → retrieve relevant)
+- [ ] ElevenLabs - premium voice (set TTS_PROVIDER=elevenlabs)
+- [ ] Access on phone - macOS shortcut / web frontend / WhatsApp bot
