@@ -90,15 +90,26 @@ class VoiceHandler:
         return random.choice(files) if files else None
 
     def _music_loop(self):
-        """Loop background music"""
-        while not self._stop_music and self._selected_music:
+        """Play background music, rotating through tracks (or loop one if specified)"""
+        if self.music_file:
+            # Specific file set - loop it
+            tracks = [self._selected_music]
+        else:
+            # Shuffle all tracks
+            tracks = list(self.music_folder.glob("*.mp3")) + list(self.music_folder.glob("*.wav"))
+            if not tracks:
+                return
+            random.shuffle(tracks)
+        idx = 0
+        while not self._stop_music:
             self._music_proc = subprocess.Popen(
-                ["afplay", "-v", str(self.music_volume), str(self._selected_music)],
+                ["afplay", "-v", str(self.music_volume), str(tracks[idx])],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
             )
             self._music_proc.wait()
+            idx = (idx + 1) % len(tracks)
 
     def transcribe(self, audio_path: str) -> str:
         """Speech-to-text via Groq Whisper"""
