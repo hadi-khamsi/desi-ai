@@ -19,7 +19,16 @@
 - **q** = Quit
 
 ## TODO
-- [ ] History RAG - embed past convos → retrieve relevant
-- [ ] Web RAG - search triggers → filler audio → fetch → inject
-- [ ] ElevenLabs - premium voice quality/speed
-- [ ] Phone access - macOS shortcut / web UI / WhatsApp bot
+
+1. **History RAG (Retrieval Augmented Generation)** - conversation memory and context retrieval
+2. **Web RAG** - real-time search for recent information
+3. **Agentic tool use** - AI reasons and decides which tools to use
+4. **Fine-tune Whisper STT (Speech-to-Text)** - improve accuracy on accent and language switching
+5. **Eval framework** - measure retrieval and response quality
+6. **RLHF (Reinforcement Learning from Human Feedback)** - collect preferences, optimize with DPO (Direct Preference Optimization)
+7. **Monitoring** - logging, latency tracking, usage metrics
+8. **ElevenLabs ($)** - streaming TTS (Text-to-Speech) for reduced latency/voice quality
+9. **Private deployment** - Mac shortcut, local web UI, WhatsApp bot
+10. **Public deployment** - cloud hosting with auth
+11. **(Maybe) Custom voice model** - train TTS, remove ElevenLabs ($), keep it free
+12. **(Maybe) Multi-agent** - multiple AI personas in conversation
