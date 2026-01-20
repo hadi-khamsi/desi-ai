@@ -6,7 +6,7 @@ load_dotenv()
 
 
 @dataclass
-class APIConfig:
+class Config:
     api_key: str
     base_url: str
     model: str
@@ -14,11 +14,11 @@ class APIConfig:
     temperature: float
 
 
-def get_config() -> APIConfig:
-    return APIConfig(
+def get_config() -> Config:
+    return Config(
         api_key=os.getenv("GROQ_API_KEY", ""),
         base_url="https://api.groq.com/openai/v1",
         model=os.getenv("MODEL", "llama-3.3-70b-versatile"),
-        max_tokens=int(os.getenv("MAX_TOKENS", "2048")),
-        temperature=float(os.getenv("TEMPERATURE", "0.7")),
+        max_tokens=int(os.getenv("MAX_TOKENS", "512")),
+        temperature=float(os.getenv("TEMPERATURE", "0.75")),
     )

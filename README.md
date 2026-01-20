@@ -1,20 +1,25 @@
-## Services
+## Desi AI - Hindi Voice Tutor
 
-| Service | Provider                | Cost         |
-|---------|-------------------------|--------------|
-| LLM     | Groq (Llama 3.3 70B)    | Free         |
-| STT     | Groq Whisper            | Free         |
-| TTS     | Edge TTS / ElevenLabs   | Free / $22/mo|
-| Music   | Local MP3s in `/music`  | Free         |
+| Service | Provider         | Type  | Cost |
+|---------|------------------|-------|------|
+| LLM     | Groq (Llama 70B) | Cloud | Free |
+| STT     | Groq Whisper     | Cloud | Free |
+| TTS     | Edge TTS         | Cloud | Free |
+| Music   | Local MP3s       | Local | Free |
 
 ## Setup
-1. Copy `.env.example` to `.env`
+1. `cp .env.example .env`
 2. Add `GROQ_API_KEY` from [groq.com](https://groq.com)
 3. `pip install -r requirements.txt`
-4. `python src/main.py` → type `convo`
+4. `python src/main.py`
+
+## Usage
+- **v** = Voice mode (speak, space to send)
+- **c** = Chat mode (type, AI speaks back)
+- **q** = Quit
 
 ## TODO
-- [ ] Web RAG - current info (search triggers → filler audio → fetch → inject)
-- [ ] History RAG - conversation memory (embed past convos → retrieve relevant)
-- [ ] ElevenLabs - premium voice (set TTS_PROVIDER=elevenlabs)
-- [ ] Access on phone - macOS shortcut / web frontend / WhatsApp bot
+- [ ] History RAG - embed past convos → retrieve relevant
+- [ ] Web RAG - search triggers → filler audio → fetch → inject
+- [ ] ElevenLabs - premium voice quality/speed
+- [ ] Phone access - macOS shortcut / web UI / WhatsApp bot

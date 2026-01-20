@@ -2,22 +2,13 @@ import os
 import select
 import sys
 import termios
-import time
 import tty
 
 from openai import OpenAI
 
 from config import get_config
-from prompts import get_system_prompt
+from prompts import SYSTEM_PROMPT
 from voice import VoiceHandler
-
-
-def check_spacebar():
-    """Non-blocking check if spacebar was pressed"""
-    if select.select([sys.stdin], [], [], 0)[0]:
-        key = sys.stdin.read(1)
-        return key == ' '
-    return False
 
 
 class RawTerminal:
@@ -37,86 +28,60 @@ class RawTerminal:
 
 class LLMClient:
     def __init__(self, config):
+        self.client = OpenAI(api_key=config.api_key, base_url=config.base_url)
         self.config = config
-        self.client = OpenAI(
-            api_key=config.api_key,
-            base_url=config.base_url,
-        )
 
-    def chat(self, messages: list[dict]) -> str:
+    def stream(self, messages: list[dict]):
+        """Stream response chunks"""
         response = self.client.chat.completions.create(
-            model=self.config.model,
-            messages=messages,
-            max_tokens=self.config.max_tokens,
-            temperature=self.config.temperature,
-        )
-        return response.choices[0].message.content
-
-    def chat_stream(self, messages: list[dict]):
-        """Stream chat response, yielding text chunks as they arrive"""
-        stream = self.client.chat.completions.create(
             model=self.config.model,
             messages=messages,
             max_tokens=self.config.max_tokens,
             temperature=self.config.temperature,
             stream=True,
         )
-        for chunk in stream:
+        for chunk in response:
             if chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content
 
 
 class ChatSession:
-    def __init__(self, client):
+    def __init__(self, client: LLMClient):
         self.client = client
-        self.messages = [{"role": "system", "content": get_system_prompt()}]
+        self.messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-    def send(self, user_input: str) -> str:
+    def send(self, user_input: str):
+        """Send message and stream response"""
         self.messages.append({"role": "user", "content": user_input})
-        try:
-            response = self.client.chat(self.messages)
-            self.messages.append({"role": "assistant", "content": response})
-            return response
-        except Exception as e:
-            self.messages.pop()
-            raise e
-
-    def send_stream(self, user_input: str):
-        """Stream response, yielding chunks."""
-        self.messages.append({"role": "user", "content": user_input})
-        self._pending_response = ""
-        try:
-            for chunk in self.client.chat_stream(self.messages):
-                self._pending_response += chunk
-                yield chunk
-            self.messages.append({"role": "assistant", "content": self._pending_response})
-        except Exception as e:
-            self.messages.pop()
-            raise e
+        full_response = ""
+        for chunk in self.client.stream(self.messages):
+            full_response += chunk
+            yield chunk
+        self.messages.append({"role": "assistant", "content": full_response})
 
 
 def create_voice_handler(config):
-    """Create VoiceHandler with current config"""
-    tts_provider = os.getenv("TTS_PROVIDER", "edge")
-    voice = os.getenv("VOICE", "en-IN-PrabhatNeural")
-    music_volume = float(os.getenv("MUSIC_VOLUME", "0.2"))
-    music_file = os.getenv("MUSIC_FILE") or None
-
+    """Create VoiceHandler with config from .env"""
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    music_path = os.path.join(project_root, "music")
-
     return VoiceHandler(
-        tts_provider=tts_provider,
-        voice=voice,
-        music_folder=music_path,
-        music_volume=music_volume,
-        music_file=music_file,
+        voice=os.getenv("VOICE", "en-IN-PrabhatNeural"),
+        music_folder=os.path.join(project_root, "music"),
+        music_enabled=os.getenv("MUSIC_ENABLED", "true").lower() == "true",
+        music_volume=float(os.getenv("MUSIC_VOLUME", "0.2")),
+        music_file=os.getenv("MUSIC_FILE"),
         groq_api_key=config.api_key,
     )
 
 
+def check_spacebar():
+    """Non-blocking spacebar check"""
+    if select.select([sys.stdin], [], [], 0)[0]:
+        return sys.stdin.read(1) == ' '
+    return False
+
+
 def wait_for_space():
-    """Wait for spacebar (returns True) or Q (returns False)"""
+    """Block until spacebar (True) or Q (False)"""
     while True:
         if select.select([sys.stdin], [], [], 0.05)[0]:
             key = sys.stdin.read(1)
@@ -126,134 +91,107 @@ def wait_for_space():
                 return False
 
 
-def conversation_mode(voice_handler, session):
-    """
-    Voice conversation with spacebar control.
-    - Auto-listens immediately
-    - SPACE to send your message
-    - SPACE to interrupt AI anytime
-    - Q to quit
-    """
+def voice_mode(voice, session):
+    """Voice input mode - speak to chat"""
     print("\n" + "=" * 40)
-    print("CONVERSATION MODE")
+    print("VOICE MODE")
     print("=" * 40)
-    print("Speaking → SPACE to send")
-    print("AI talking → SPACE to interrupt")
-    print("Q to quit")
+    print("speak → space to send")
+    print("q to go back")
     print("=" * 40 + "\n")
 
     with RawTerminal():
         while True:
             try:
-                # Start recording immediately
-                print("[Listening... SPACE to send]", end="\r", flush=True)
-                audio_path = voice_handler.record_until_space()
+                print("[listening... space to send]", end="\r", flush=True)
+                audio_path = voice.record_until_space()
 
                 if not audio_path:
                     continue
 
-                # Transcribe
-                print("[Processing...]             ", end="\r", flush=True)
-                user_input = voice_handler.transcribe(audio_path)
+                print("[processing...]             ", end="\r", flush=True)
+                user_input = voice.transcribe(audio_path)
                 os.unlink(audio_path)
 
                 if not user_input:
-                    print("                            ", end="\r")
                     continue
 
-                print(f"You: {user_input}                    ")
+                print(f"You: {user_input}")
 
-                # Check for exit
-                lower_input = user_input.lower().strip()
-                if any(cmd in lower_input for cmd in ["exit", "quit", "stop", "goodbye", "bye"]):
+                # Exit check
+                if any(cmd in user_input.lower() for cmd in ["exit", "quit", "stop", "bye"]):
                     print("Desi: Take care Haadi!")
-                    voice_handler.speak("Take care Haadi!")
-                    time.sleep(2)
+                    voice.speak("Take care Haadi!")
                     break
 
-                # AI response with TTS
-                print("Desi: ", end="", flush=True)
-                response = voice_handler.speak_streaming(
-                    session.send_stream(user_input),
+                # Get and speak response (with interrupt hint)
+                print("Desi: [space to interrupt] ", end="", flush=True)
+                voice.speak_streaming(
+                    session.send(user_input),
                     interrupt_check=check_spacebar
                 )
-                print(response)
-                print()
+                print("\n")
 
             except KeyboardInterrupt:
-                print("\n\nExiting...")
-                voice_handler.stop_speaking()
+                voice.stop_speaking()
                 termios.tcflush(sys.stdin, termios.TCIFLUSH)
                 break
-            except Exception as e:
-                print(f"\nError: {e}")
-                continue
 
-    print()
+
+def chat_mode(voice, session):
+    """Text input mode - type to chat"""
+    print("\n" + "=" * 40)
+    print("CHAT MODE")
+    print("=" * 40)
+    print("type message, AI speaks back")
+    print("'q' to go back")
+    print("=" * 40 + "\n")
+
+    while True:
+        try:
+            user_input = input("You: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if not user_input or user_input.lower() == 'q':
+            break
+
+        print("Desi: [space to interrupt] ", end="", flush=True)
+        with RawTerminal():
+            voice.speak_streaming(session.send(user_input), interrupt_check=check_spacebar)
+        print("\n")
 
 
 def main():
     config = get_config()
 
     if not config.api_key:
-        print("Error: GROQ_API_KEY not set. Check your .env file.")
+        print("Error: GROQ_API_KEY not set. Check .env file.")
         sys.exit(1)
 
-    # Initialize voice (starts music immediately)
-    print("Starting...")
-    voice_handler = create_voice_handler(config)
-
-    print(f"\nUsing Groq ({config.model})")
-    print("\nCommands:")
-    print("  'convo'  - Voice conversation mode")
-    print("  'speak [on/off]' - Voice output for text chat")
-    print("  'exit/quit' - Exit\n")
-
+    print("Starting Desi AI...")
+    voice = create_voice_handler(config)
     client = LLMClient(config)
     session = ChatSession(client)
-    speak_enabled = False
+
+    print(f"\nUsing {config.model}")
 
     while True:
-        try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nGoodbye!")
+        print("\n[v]oice  [c]hat  [q]uit: ", end="", flush=True)
+
+        # Read single keypress, no Enter needed
+        with RawTerminal():
+            key = sys.stdin.read(1).lower()
+
+        if key == 'v':
+            print("voice")
+            voice_mode(voice, session)
+        elif key == 'c':
+            print("chat")
+            chat_mode(voice, session)
+        elif key == 'q':
+            print("quit\nTake care!")
             break
-
-        if not user_input:
-            continue
-
-        if user_input.lower() in ("exit", "quit"):
-            print("Take care!")
-            break
-
-        # Conversation mode - the main feature
-        if user_input.lower() in ("convo", "conversation", "talk", "chat"):
-            conversation_mode(voice_handler, session)
-            continue
-
-        if user_input.lower().startswith("speak "):
-            setting = user_input[6:].strip().lower()
-            if setting in ["on", "off"]:
-                speak_enabled = setting == "on"
-                print(f"\n-> Voice output {'ON' if speak_enabled else 'OFF'}\n")
-            else:
-                print("\nUsage: speak [on/off]\n")
-            continue
-
-        # Regular text input
-        try:
-            if speak_enabled and voice_handler:
-                print("\nDesi: ", end="", flush=True)
-                response = voice_handler.speak_streaming(session.send_stream(user_input))
-                print(response)
-                print()
-            else:
-                response = session.send(user_input)
-                print(f"\nDesi: {response}\n")
-
-        except Exception as e:
-            print(f"\nError: {e}\n")
 
 
 if __name__ == "__main__":

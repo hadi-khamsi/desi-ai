@@ -4,6 +4,7 @@ import os
 import random
 import re
 import select
+import signal
 import subprocess
 import sys
 import tempfile
@@ -18,202 +19,158 @@ import soundfile as sf
 from groq import Groq
 
 
-def to_spoken_style(text: str) -> str:
-    """Clean text for TTS"""
+# Pre-compiled patterns for speed
+ELLIPSIS_PATTERN = re.compile(r'\.{2,}')
+SENTENCE_END_PATTERN = re.compile(r'[.!?]\s')
+
+
+def clean_for_tts(text: str) -> str:
+    """Remove markdown and special chars that break TTS"""
     text = text.replace("*", "").replace("\n", " ")
-    for char in ["<", ">", "=", "/", "break", "time", "ms", "#", "_", "`"]:
+    for char in "<>=/#_`":
         text = text.replace(char, "")
     return text.strip()
-
-
-class EdgeTTSProvider:
-    def __init__(self, voice: str = "en-IN-PrabhatNeural"):
-        self.voice = voice
-
-    def generate_stream_to_file(self, text: str, output_path: str):
-        """Generate full TTS file for non-blocking playback"""
-        styled = to_spoken_style(text)
-        asyncio.run(edge_tts.Communicate(styled, self.voice).save(output_path))
 
 
 class VoiceHandler:
     def __init__(
         self,
-        tts_provider: str = "edge",
         voice: str = "en-IN-PrabhatNeural",
         music_folder: str = "./music",
+        music_enabled: bool = True,
         music_volume: float = 0.2,
         music_file: str = None,
         groq_api_key: str = None,
     ):
+        self.voice = voice
         self.sample_rate = 16000
-        self.groq_client = Groq(api_key=groq_api_key) if groq_api_key else None
+        self.groq = Groq(api_key=groq_api_key) if groq_api_key else None
 
+        # Music config
         self.music_folder = Path(music_folder)
+        self.music_enabled = music_enabled
         self.music_volume = music_volume
         self.music_file = music_file
-
-        # Track subprocesses for cleanup
-        self._music_process = None
+        self._music_proc = None
         self._stop_music = False
-        self._speech_processes = []
-        self._current_speech_proc = None  # Track current speech for interruption
-        self._is_speaking = False
-        self._stop_streaming = False  # Flag to abort streaming TTS
 
-        # TTS
-        if tts_provider == "edge":
-            self.tts = EdgeTTSProvider(voice)
-        else:
-            raise ValueError(f"Unknown TTS provider: {tts_provider}")
+        # Speech state
+        self._speech_proc = None
+        self._stop_streaming = False
 
-        # Register cleanup on exit
+        # Start music if enabled
+        self._selected_music = self._pick_music() if music_enabled else None
+        if self._selected_music:
+            threading.Thread(target=self._music_loop, daemon=True).start()
+
         atexit.register(self.cleanup)
 
-        # Pick music once at start (keeps same song for whole session)
-        self._selected_music = self._get_music_file()
-
-        # Start background music immediately
-        self.music_thread = threading.Thread(target=self._play_music_loop, daemon=True)
-        self.music_thread.start()
-
     def cleanup(self):
-        """Stop music and cleanup processes on exit"""
+        """Stop all audio on exit"""
         self._stop_music = True
         self.stop_speaking()
-        if self._music_process and self._music_process.poll() is None:
-            self._music_process.terminate()
-            try:
-                self._music_process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                self._music_process.kill()
-        for proc in self._speech_processes:
-            if proc and proc.poll() is None:
-                proc.terminate()
+        if self._music_proc and self._music_proc.poll() is None:
+            self._music_proc.terminate()
 
     def stop_speaking(self):
-        """Immediately stop any ongoing speech and pending TTS"""
-        self._is_speaking = False
-        self._stop_streaming = True  # Flag to stop streaming TTS
+        """Stop current speech"""
+        self._stop_streaming = True
+        if self._speech_proc and self._speech_proc.poll() is None:
+            self._speech_proc.terminate()
 
-        if self._current_speech_proc and self._current_speech_proc.poll() is None:
-            self._current_speech_proc.terminate()
-            try:
-                self._current_speech_proc.wait(timeout=0.5)
-            except:
-                self._current_speech_proc.kill()
-            self._current_speech_proc = None
-
-        # Kill all speech processes
-        for proc in self._speech_processes[:]:
-            if proc and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=0.5)
-                except:
-                    proc.kill()
-        self._speech_processes.clear()
-
-    def _get_music_file(self) -> Path | None:
+    def _pick_music(self) -> Path | None:
+        """Pick music file (specific or random)"""
         if not self.music_folder.exists():
             return None
         if self.music_file:
-            specific = self.music_folder / self.music_file
-            if specific.exists():
-                return specific
+            path = self.music_folder / self.music_file
+            if path.exists():
+                return path
         files = list(self.music_folder.glob("*.mp3")) + list(self.music_folder.glob("*.wav"))
         return random.choice(files) if files else None
 
-    def _play_music_loop(self):
-        import signal
-        while not self._stop_music:
-            if not self._selected_music:
-                return
-            if os.name == "posix":
-                # Start music process, ignore SIGINT so Ctrl+C doesn't kill it
-                self._music_process = subprocess.Popen(
-                    ["afplay", "-v", str(self.music_volume), str(self._selected_music)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
-                )
-                self._music_process.wait()
-            else:
-                self._music_process = subprocess.Popen(
-                    ["powershell", "-c", f"(New-Object Media.SoundPlayer '{self._selected_music}').PlaySync()"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL
-                )
-                self._music_process.wait()
+    def _music_loop(self):
+        """Loop background music"""
+        while not self._stop_music and self._selected_music:
+            self._music_proc = subprocess.Popen(
+                ["afplay", "-v", str(self.music_volume), str(self._selected_music)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_IGN)
+            )
+            self._music_proc.wait()
 
     def transcribe(self, audio_path: str) -> str:
-        """Transcribe audio using Groq Whisper API"""
-        if not self.groq_client:
-            raise ValueError("Groq API key required for transcription")
-
-        with open(audio_path, "rb") as audio_file:
-            transcription = self.groq_client.audio.transcriptions.create(
-                file=audio_file,
+        """Speech-to-text via Groq Whisper"""
+        if not self.groq:
+            raise ValueError("Groq API key required")
+        with open(audio_path, "rb") as f:
+            result = self.groq.audio.transcriptions.create(
+                file=f,
                 model="whisper-large-v3-turbo",
                 response_format="text",
             )
-        return transcription.strip()
+        return result.strip()
+
+    def _generate_tts(self, text: str, output_path: str):
+        """Generate TTS audio file"""
+        cleaned = clean_for_tts(text)
+        if len(cleaned) < 2:
+            return False
+        asyncio.run(edge_tts.Communicate(cleaned, self.voice).save(output_path))
+        return True
+
+    def _play_audio(self, path: str, interrupt_check=None):
+        """Play audio file, optionally interruptible"""
+        self._speech_proc = subprocess.Popen(["afplay", path])
+        while self._speech_proc.poll() is None:
+            if self._stop_streaming:
+                self._speech_proc.terminate()
+                break
+            if interrupt_check and interrupt_check():
+                self._stop_streaming = True
+                self._speech_proc.terminate()
+                break
+            time.sleep(0.05)
 
     def speak(self, text: str):
-        """Generate TTS and play non-blocking"""
-        def _speak_thread():
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            temp_file.close()
-            self.tts.generate_stream_to_file(text, temp_file.name)
+        """Generate and play TTS (non-blocking)"""
+        def _run():
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            tmp.close()
+            try:
+                if self._generate_tts(text, tmp.name):
+                    self._play_audio(tmp.name)
+            finally:
+                Path(tmp.name).unlink(missing_ok=True)
+        threading.Thread(target=_run, daemon=True).start()
 
-            if os.name == "posix":
-                proc = subprocess.Popen(["afplay", temp_file.name])
-            else:
-                proc = subprocess.Popen(
-                    ["powershell", "-c", f"(New-Object Media.SoundPlayer '{temp_file.name}').PlaySync()"]
-                )
-            self._speech_processes.append(proc)
-            self._current_speech_proc = proc
-            self._is_speaking = True
-            proc.wait()
-            self._is_speaking = False
-            Path(temp_file.name).unlink(missing_ok=True)
-
-        threading.Thread(target=_speak_thread, daemon=True).start()
-
-    def speak_streaming(self, text_generator, interrupt_check=None):
-        """Stream text to TTS, playing sentences as they complete."""
+    def speak_streaming(self, text_generator, interrupt_check=None, print_live=True):
+        """Stream text and speak sentences as they complete"""
         self._stop_streaming = False
         full_text = ""
         buffer = ""
-        queued_sentences = []
-
-        def queue_tts(sentence):
-            """Generate TTS in background, add to queue"""
-            if len(to_spoken_style(sentence)) < 3:
-                return
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            temp_file.close()
-            try:
-                self.tts.generate_stream_to_file(sentence, temp_file.name)
-                queued_sentences.append(temp_file.name)
-            except Exception:
-                Path(temp_file.name).unlink(missing_ok=True)
 
         def extract_sentence(text):
-            """Extract first complete sentence if exists, return (sentence, remaining)"""
-            # Collapse ... to single char for splitting
-            temp = re.sub(r'\.{2,}', '…', text)
-            # Find sentence end followed by space
-            match = re.search(r'[.!?]\s', temp)
+            """Get first complete sentence"""
+            temp = ELLIPSIS_PATTERN.sub('…', text)  # Protect ...
+            match = SENTENCE_END_PATTERN.search(temp)
             if match:
                 pos = match.end()
-                sentence = text[:pos].strip()
-                remaining = text[pos:]
-                return sentence, remaining
+                return text[:pos].strip(), text[pos:]
             return None, text
 
-        # Collect full text and queue sentences as they complete
+        def speak_sentence(sentence):
+            if len(clean_for_tts(sentence)) < 3:
+                return
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            tmp.close()
+            try:
+                if self._generate_tts(sentence, tmp.name):
+                    self._play_audio(tmp.name, interrupt_check)
+            finally:
+                Path(tmp.name).unlink(missing_ok=True)
+
         for chunk in text_generator:
             if self._stop_streaming:
                 break
@@ -224,78 +181,49 @@ class VoiceHandler:
             full_text += chunk
             buffer += chunk
 
-            # Extract and queue complete sentences
+            if print_live:
+                print(chunk, end="", flush=True)
+
             while True:
+                if self._stop_streaming:
+                    break
                 sentence, buffer = extract_sentence(buffer)
                 if sentence:
-                    threading.Thread(target=queue_tts, args=(sentence,), daemon=True).start()
+                    speak_sentence(sentence)
                 else:
                     break
 
-        # Queue remaining buffer
-        if buffer.strip():
-            threading.Thread(target=queue_tts, args=(buffer.strip(),), daemon=True).start()
-
-        # Wait a bit for TTS threads to finish
-        time.sleep(0.3)
-
-        # Play all queued audio in order
-        for audio_path in queued_sentences:
-            if self._stop_streaming:
-                break
-            if interrupt_check and interrupt_check():
-                self._stop_streaming = True
-                break
-
-            if os.path.exists(audio_path):
-                proc = subprocess.Popen(["afplay", audio_path])
-                self._current_speech_proc = proc
-                self._is_speaking = True
-
-                while proc.poll() is None:
-                    if self._stop_streaming or (interrupt_check and interrupt_check()):
-                        proc.terminate()
-                        break
-                    time.sleep(0.05)
-
-                self._is_speaking = False
-                Path(audio_path).unlink(missing_ok=True)
+        # Speak remaining text
+        if buffer.strip() and not self._stop_streaming:
+            speak_sentence(buffer.strip())
 
         return full_text
 
     def record_until_space(self) -> str | None:
-        """Record audio until spacebar pressed. Returns path to audio file."""
-        chunk_duration = 0.1
-        chunk_samples = int(self.sample_rate * chunk_duration)
-        audio_chunks = []
+        """Record audio until spacebar. Returns temp file path."""
+        chunks = []
+        chunk_size = int(self.sample_rate * 0.1)
 
         stream = sd.InputStream(
             samplerate=self.sample_rate,
             channels=1,
             dtype=np.float32,
-            blocksize=chunk_samples
+            blocksize=chunk_size
         )
 
         with stream:
-            while True:
-                # Check for spacebar
+            while len(chunks) < 600:  # Max 60 seconds
                 if select.select([sys.stdin], [], [], 0)[0]:
-                    key = sys.stdin.read(1)
-                    if key == ' ':
+                    if sys.stdin.read(1) == ' ':
                         break
+                chunk, _ = stream.read(chunk_size)
+                chunks.append(chunk.copy())
 
-                chunk, _ = stream.read(chunk_samples)
-                audio_chunks.append(chunk.copy())
-
-                # Safety limit (60 seconds)
-                if len(audio_chunks) > 600:
-                    break
-
-        if not audio_chunks:
+        if not chunks:
             return None
 
-        audio = np.concatenate(audio_chunks)
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
-        temp_file.close()
-        sf.write(temp_file.name, audio, self.sample_rate)
-        return temp_file.name
+        audio = np.concatenate(chunks)
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".wav")
+        tmp.close()
+        sf.write(tmp.name, audio, self.sample_rate)
+        return tmp.name
