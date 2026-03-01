@@ -1,4 +1,4 @@
-## Desi AI - Hindi Voice Tutor
+## Desi AI - Hindi Voice Assistant
 
 | Service | Provider         | Type  | Cost |
 |---------|------------------|-------|------|
@@ -11,7 +11,7 @@
 1. `cp .env.example .env`
 2. Add `GROQ_API_KEY` from [groq.com](https://groq.com)
 3. `pip install -r requirements.txt`
-4. `python src/main.py`
+4. `python3 src/main.py`
 
 ## Usage
 - **v** = Voice mode (speak, space to send)

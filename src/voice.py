@@ -1,6 +1,5 @@
 import asyncio
 import atexit
-import os
 import random
 import re
 import select
