@@ -5,7 +5,6 @@
 | LLM     | Groq (Llama 70B) | Cloud | Free |
 | STT     | Groq Whisper     | Cloud | Free |
 | TTS     | Edge TTS         | Cloud | Free |
-| Music   | Local MP3s       | Local | Free |
 
 ## Setup
 1. `cp .env.example .env`
