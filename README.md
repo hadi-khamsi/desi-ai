@@ -1,4 +1,4 @@
-## Desi AI - Hindi Voice Assistant
+## Desi AI - Hindi/Urdu Voice Assistant
 
 | Service | Provider         | Type  | Cost |
 |---------|------------------|-------|------|
