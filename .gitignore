@@ -17,3 +17,6 @@ ENV/
 # IDE
 .vscode/
 .idea/
+
+# Music folder
+/music
